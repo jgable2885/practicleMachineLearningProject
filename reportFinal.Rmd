@@ -1,0 +1,81 @@
+---
+title: Weight-lifting classification
+output: html_document
+---
+```{r, message=F, results='hide', warning=FALSE}
+library(caret)
+```
+
+Load the data. 
+```{r}
+training <- read.csv("pml-training.csv", na.string=c("NA", ""))
+```
+
+I first explore the NA values. The goal is to determine what percent of each column is NA.
+```{r}
+naDist <- numeric()
+for(i in 1:dim(training)[2]){
+        naDist <- c(naDist, sum(is.na(training[,i]))/dim(training)[1])
+}
+hist(naDist)
+```
+
+There appear to be quite a few columns with nearly all NA values, so those are removed. If those are critical to classe determination then training will fail and I can return to potential patterns in the NA values.
+While cleaning the data, also remove variables that are near zero variance or will not generalize based on their definition.
+```{r}
+training <- training[,-c(1:5)] ## remove columns w/data that will not generalize
+remove <- numeric()
+for(i in 1:dim(training)[2]){
+        if(sum(is.na(training[,i])) > 0.96*dim(training)[1])
+        {
+                remove <- c(remove, i)
+        }
+}
+training <- training[,-remove] #remove columns with >96% NA values
+nzv <- nearZeroVar(training)
+nzv
+training <- training[,-as.numeric(nzv)]
+```
+To better estimate out of sample error, set aside 20% of the training data as a test set (in this case leaving "pml_test.csv" as a validation/quiz set).
+
+```{r, cache=TRUE, message=F, warning=F}
+set.seed(12345)
+inTrain <- createDataPartition(training$classe, p=0.8, list=F)
+training.final <- training[inTrain,]
+testing <- training[-inTrain,]
+```
+
+Let's try one relatively simple and fast algorithm (k nearest neighbors) and one potentially more accurate but time consuming algorithm (the default gradient boosted model from caret). In both cases, let's use 10-fold cross validation to estimate the accuracy on the training set and give a somewhat optimisic assessment of out of sample error .
+
+```{r, cache=TRUE, message=F, warning=F}
+startTimeFullKNN <- Sys.time()
+trainCtrl <- trainControl(method="cv", number=10) ## Use 10-Fold CROSS VALIDATION
+modKNN <- train(classe ~ ., data=training.final, preProcess=c("center", "scale"), trControl = trainCtrl, method="knn")
+endTimeFullKNN <- Sys.time()
+endTimeFullKNN - startTimeFullKNN
+modKNN$finalModel
+trainPreds <- predict(modKNN, training.final)
+confusionMatrix(trainPreds, reference=training.final$classe)
+```
+
+```{r, cache=TRUE, message=F, warning=F}
+startTimeFullGBM <- Sys.time()
+trainCtrl <- trainControl(method="cv", number=10) ## Use 10-Fold CROSS VALIDATION
+modGBM <- train(classe ~ ., data=training.final, preProcess=c("center", "scale"), trControl = trainCtrl, method="gbm", verbose=F)
+endTimeFullGBM <- Sys.time()
+endTimeFullGBM - startTimeFullGBM
+modGBM$finalModel
+trainPredsGBM <- predict(modGBM, training.final)
+confusionMatrix(trainPredsGBM, reference=training.final$classe)
+```
+
+The GBM performs better than the KNN model. Now let's see how these two algorithms perform on the test set. This provides a better estimate of the out of sample error, again based on 10-fold cross-validation. If, for instance, the GBM model was very overfit then performance would likely suffer on the test set.
+
+```{r, cache=TRUE}
+confusionMatrix(predict(modKNN, testing), testing$classe)
+confusionMatrix(predict(modGBM, testing), testing$classe)
+```
+
+The GBM model performs better with an estimated error of 0.84-1.53% (95% CI) compared to 2.03-3.04% (95% CI) for the KNN model (based on 10-fold cross validation in both cases). Note that these error rates are higher than that determined for the training set, as expected.
+
+Given these results the GBM model will be applied to the quiz/validation set.
